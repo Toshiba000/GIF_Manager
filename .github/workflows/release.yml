@@ -1,0 +1,104 @@
+name: Build Release Binaries (Linux & Windows)
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-linux:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libxcb-cursor0 libegl1 libdbus-1-3 libxkbcommon-x11-0 libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-xinerama0 libxcb-xfixes0 file wget curl
+          pip install --upgrade pip
+          pip install PyQt6 Pillow numpy pyinstaller
+
+      - name: Build Linux Standalone Binary & AppImage
+        run: |
+          pyinstaller --noconfirm --clean --onefile --windowed --name "GIF_Desktop_Manager_Linux_x86_64" gif_desktop_app.py
+          mv dist/GIF_Desktop_Manager_Linux_x86_64 ./GIF_Desktop_Manager_Linux_x86_64
+          chmod +x ./GIF_Desktop_Manager_Linux_x86_64
+
+          pyinstaller --noconfirm --clean --onedir --windowed --name "GIF_Desktop_Manager" gif_desktop_app.py
+          mkdir -p GIF_Desktop_Manager.AppDir/usr/bin
+          cp -r dist/GIF_Desktop_Manager/* GIF_Desktop_Manager.AppDir/usr/bin/
+
+          python3 -c 'from PIL import Image, ImageDraw; img = Image.new("RGBA", (256, 256), (0,0,0,0)); d = ImageDraw.Draw(img); d.rounded_rectangle((16,16,240,240), radius=48, fill=(41,44,48,255), outline=(82,148,226,255), width=10); d.line((128,72,128,184), fill=(215,215,217,255), width=16); d.line((72,128,184,128), fill=(215,215,217,255), width=16); img.save("GIF_Desktop_Manager.AppDir/gif-desktop-manager.png")'
+          cp GIF_Desktop_Manager.AppDir/gif-desktop-manager.png GIF_Desktop_Manager.AppDir/.DirIcon
+
+          printf "[Desktop Entry]\nType=Application\nName=GIF Desktop Manager\nExec=GIF_Desktop_Manager\nIcon=gif-desktop-manager\nCategories=Utility;Graphics;\nTerminal=false\n" > GIF_Desktop_Manager.AppDir/gif-desktop-manager.desktop
+          printf '#!/usr/bin/env bash\nHERE="$(dirname "$(readlink -f "${0}")")"\nexport QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"\nexec "${HERE}/usr/bin/GIF_Desktop_Manager" "$@"\n' > GIF_Desktop_Manager.AppDir/AppRun
+          chmod +x GIF_Desktop_Manager.AppDir/AppRun
+
+          curl -L "https://github.com/AppImage/appimagetool/releases/download/continuous/appimagetool-x86_64.AppImage" -o /tmp/appimagetool
+          chmod +x /tmp/appimagetool
+          ARCH=x86_64 /tmp/appimagetool --appimage-extract-and-run GIF_Desktop_Manager.AppDir ./GIF_Desktop_Manager-x86_64.AppImage
+          chmod +x ./GIF_Desktop_Manager-x86_64.AppImage
+
+      - name: Upload Linux Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Linux-Release
+          path: |
+            GIF_Desktop_Manager-x86_64.AppImage
+            GIF_Desktop_Manager_Linux_x86_64
+
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install PyQt6 Pillow numpy pyinstaller
+
+      - name: Build Windows Executable
+        run: |
+          pyinstaller --noconfirm --clean --onedir --noupx --windowed --name "GIF_Desktop_Manager" gif_desktop_app.py
+          Compress-Archive -Path "dist\GIF_Desktop_Manager" -DestinationPath "GIF_Desktop_Manager_Windows10_x64.zip"
+
+      - name: Upload Windows Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: Windows-Release
+          path: GIF_Desktop_Manager_Windows10_x64.zip
+
+  create-github-release:
+    needs: [build-linux, build-windows]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release_assets
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            release_assets/Linux-Release/*
+            release_assets/Windows-Release/*
+          generate_release_notes: true
